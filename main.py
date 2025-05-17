@@ -274,12 +274,12 @@ def show_simulator(page: ft.Page):
             async def task():
                 await asyncio.sleep(1)
                 set_state(STATES["WAITING_FOR_COIN"], "Cambio devuelto. Gracias.")
-            page.run_task(task())
+            page.run_task(task)
         elif new_state == STATES["PRODUCT_SELECTED"]:
             async def task():
                 await asyncio.sleep(2)
                 set_state(STATES["PRODUCT_DELIVERED"], msg.replace("Procesando", "dispensado"))
-            page.run_task(task())
+            page.run_task(task)
 
     def handle_insert(e):
         if current_state == STATES["WAITING_FOR_COIN"]:
