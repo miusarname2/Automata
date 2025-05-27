@@ -1,4 +1,6 @@
 import flet as ft
+from State import State
+from NFA import NFA
 import re
 import asyncio
 
@@ -26,8 +28,8 @@ def show_result_alert(title: str, text: str, page: ft.Page, on_dismiss_callback=
 
 # --- Vistas ---
 
-def show_main_menu(page: ft.Page):
-    """Muestra el menú principal."""
+# def show_main_menu(page: ft.Page):
+#     """Muestra el menú principal."""
     page.clean()
     page.title = "Máquinas de Estados y Validadores"
 
@@ -127,8 +129,8 @@ def show_validator(page: ft.Page):
                 validation_result_text = "Debes introducir un regex personalizado."
             else:
                 try:
-                    re.compile(pattern)
-                    valid = re.fullmatch(pattern, s) is not None
+                    nfa = regex_to_nfa(pattern)
+                    valid = simulate_nfa(nfa, s)
                     validation_result_title = "Validación Exitosa" if valid else "Validación Fallida"
                     validation_result_text = ("✅ La cadena tiene el formato válido." 
                                               if valid else 
@@ -233,6 +235,107 @@ def show_validator(page: ft.Page):
 
     page.update()
 
+def regex_to_nfa(pattern):
+    """Convierte una regex simple a un AFN (usando el algoritmo de Thompson)"""
+    def build_nfa(c):
+        s1 = State()
+        s2 = State(is_final=True)
+        s1.add_transition(c, s2)
+        return NFA(s1, s2)
+
+    def concat(nfa1, nfa2):
+        nfa1.end.is_final = False
+        nfa1.end.add_epsilon(nfa2.start)
+        return NFA(nfa1.start, nfa2.end)
+
+    def alternate(nfa1, nfa2):
+        start = State()
+        end = State(is_final=True)
+        start.add_epsilon(nfa1.start)
+        start.add_epsilon(nfa2.start)
+        nfa1.end.is_final = False
+        nfa2.end.is_final = False
+        nfa1.end.add_epsilon(end)
+        nfa2.end.add_epsilon(end)
+        return NFA(start, end)
+
+    def kleene(nfa):
+        start = State()
+        end = State(is_final=True)
+        start.add_epsilon(nfa.start)
+        start.add_epsilon(end)
+        nfa.end.is_final = False
+        nfa.end.add_epsilon(nfa.start)
+        nfa.end.add_epsilon(end)
+        return NFA(start, end)
+
+    def parse(regex):
+        output = []
+        ops = []
+
+        def apply_operator():
+            op = ops.pop()
+            if op == ".":
+                b = output.pop()
+                a = output.pop()
+                output.append(concat(a, b))
+            elif op == "|":
+                b = output.pop()
+                a = output.pop()
+                output.append(alternate(a, b))
+            elif op == "*":
+                a = output.pop()
+                output.append(kleene(a))
+
+        precedence = {"*": 3, ".": 2, "|": 1}
+        i = 0
+        while i < len(regex):
+            c = regex[i]
+            if c.isalnum():
+                output.append(build_nfa(c))
+                if i+1 < len(regex) and (regex[i+1].isalnum() or regex[i+1] == "("):
+                    ops.append(".")
+            elif c == "(":
+                ops.append(c)
+            elif c == ")":
+                while ops[-1] != "(":
+                    apply_operator()
+                ops.pop()
+            elif c in "*|":
+                while ops and ops[-1] != "(" and precedence[ops[-1]] >= precedence[c]:
+                    apply_operator()
+                ops.append(c)
+            i += 1
+        while ops:
+            apply_operator()
+        return output[-1]
+
+    return parse(pattern)
+
+def epsilon_closure(states):
+    stack = list(states)
+    closure = set(states)
+    while stack:
+        state = stack.pop()
+        for next_state in state.epsilon:
+            if next_state not in closure:
+                closure.add(next_state)
+                stack.append(next_state)
+    return closure
+
+def move(states, symbol):
+    result = set()
+    for state in states:
+        if symbol in state.transitions:
+            for target in state.transitions[symbol]:
+                result.add(target)
+    return result
+
+def simulate_nfa(nfa, s):
+    current_states = epsilon_closure([nfa.start])
+    for c in s:
+        current_states = epsilon_closure(move(current_states, c))
+    return any(state.is_final for state in current_states)
 
 def show_simulator(page: ft.Page):
     """Simulador de máquina expendedora (FSM)."""
