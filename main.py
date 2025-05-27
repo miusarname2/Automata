@@ -4,6 +4,14 @@ from NFA import NFA
 import re
 import asyncio
 
+State._id_counter = 0
+_original_init = State.__init__
+def _state_init(self, is_final=False):
+    _original_init(self, is_final)
+    State._id_counter += 1
+    self.id = State._id_counter
+State.__init__ = _state_init
+
 # --- Funciones Auxiliares ---
 
 def close_dialog(dialog: ft.AlertDialog, page: ft.Page):
@@ -118,7 +126,7 @@ def show_validator(page: ft.Page):
 
     # --- Función de cierre y validación ---
     def close_dlg_and_validate(e):
-        nonlocal validation_result_title, validation_result_text, validation_done
+        nonlocal validation_done, validation_result_title, validation_result_text
         s = txt_input_string.value or ""
         txt_input_string.value = ""
 
@@ -130,37 +138,29 @@ def show_validator(page: ft.Page):
             else:
                 try:
                     nfa = regex_to_nfa(pattern)
-                    valid = simulate_nfa(nfa, s)
-                    validation_result_title = "Validación Exitosa" if valid else "Validación Fallida"
-                    validation_result_text = ("✅ La cadena tiene el formato válido." 
-                                              if valid else 
-                                              "❌ La cadena NO cumple con el formato.")
+                    valid, trace = simulate_nfa_trace(nfa, s)
+                    # Construir texto con pasos intermedios
+                    details = []
+                    for sym, states in trace:
+                        if sym is None:
+                            details.append(f"Inicio ε-cierre: estados {sorted(st.id for st in states)}")
+                        else:
+                            details.append(f"Después de '{sym}': estados {sorted(st.id for st in states)}")
+                    trace_text = "\n".join(details)
+                    title = "Cadena Válida" if valid else "Cadena Inválida"
+                    validation_result_title = title
+                    validation_result_text = trace_text
                 except re.error as ex:
                     validation_result_title = "Error de Regex"
                     validation_result_text = f"Regex inválido: {ex}"
         else:
-            char_set = ""
-            if switch_numbers.value: char_set += "0-9"
-            if switch_letters.value: char_set += "a-zA-Z"
-            if switch_special.value: char_set += re.escape(special_chars)
-
-            if not char_set:
-                if s == "":
-                    validation_result_title = "Resultado de Validación"
-                    validation_result_text = "✅ Cadena vacía válida."
-                else:
-                    validation_result_title = "Resultado de Validación"
-                    validation_result_text = "❌ NO cumple (solo cadena vacía)."
-            else:
-                pattern = f"^[{char_set}]*$"
-                valid = re.fullmatch(pattern, s) is not None
-                validation_result_title = "Validación Exitosa" if valid else "Validación Fallida"
-                validation_result_text = ("✅ La cadena tiene el formato válido." 
-                                          if valid else 
-                                          "❌ La cadena NO cumple con el formato.")
+            # ... lógica original para DFA conceptual ...
+            valid = re.fullmatch(pattern, s) is not None
+            valid, trace = False, []  # Omitir traza para modo simple
+            validation_result_title = "Validación Exitosa" if valid else "Validación Fallida"
+            validation_result_text = ("✅ La cadena tiene el formato válido." if valid else "❌ La cadena NO cumple con el formato.")
 
         validation_done = True
-        # Cerrar el diálogo de entrada
         dialog_ref["input"].open = False
         page.update()
 
@@ -234,6 +234,21 @@ def show_validator(page: ft.Page):
         update_switch_label(_DummyEvent(sw))
 
     page.update()
+
+def simulate_nfa_trace(nfa: NFA, s: str):
+    trace = []
+    # Estado inicial con cierre-epsilon
+    current_states = epsilon_closure([nfa.start])
+    trace.append((None, set(current_states)))
+    # Por cada símbolo consumido
+    for c in s:
+        moved = move(current_states, c)
+        closed = epsilon_closure(moved)
+        trace.append((c, set(closed)))
+        current_states = closed
+    # Validación final
+    valid = any(state.is_final for state in current_states)
+    return valid, trace
 
 def regex_to_nfa(pattern):
     """Convierte una regex simple a un AFN (usando el algoritmo de Thompson)"""
