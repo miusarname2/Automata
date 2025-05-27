@@ -4,16 +4,19 @@ from NFA import NFA
 import re
 import asyncio
 
+# --- Asignación de IDs únicos a cada State para trazabilidad ---
 State._id_counter = 0
 _original_init = State.__init__
+
 def _state_init(self, is_final=False):
+    # Llamamos al constructor original
     _original_init(self, is_final)
+    # Incrementamos contador y asignamos ID al estado
     State._id_counter += 1
     self.id = State._id_counter
 State.__init__ = _state_init
 
 # --- Funciones Auxiliares ---
-
 def close_dialog(dialog: ft.AlertDialog, page: ft.Page):
     """Cierra el diálogo pasado como argumento."""
     dialog.open = False
@@ -237,113 +240,136 @@ def show_validator(page: ft.Page):
 
 def simulate_nfa_trace(nfa: NFA, s: str):
     trace = []
-    # Estado inicial con cierre-epsilon
-    current_states = epsilon_closure([nfa.start])
-    trace.append((None, set(current_states)))
-    # Por cada símbolo consumido
+    # Paso 0: ε-cierre del estado inicial
+    curr = epsilon_closure([nfa.start])
+    trace.append((None, curr))  # None representa paso inicial
+    # Por cada símbolo, movemos y luego cerramos con ε
     for c in s:
-        moved = move(current_states, c)
-        closed = epsilon_closure(moved)
-        trace.append((c, set(closed)))
-        current_states = closed
-    # Validación final
-    valid = any(state.is_final for state in current_states)
+        moved = move(curr, c)
+        curr = epsilon_closure(list(moved))
+        trace.append((c, curr))
+    valid = any(st.is_final for st in curr)
     return valid, trace
 
 def regex_to_nfa(pattern):
-    """Convierte una regex simple a un AFN (usando el algoritmo de Thompson)"""
-    def build_nfa(c):
-        s1 = State()
+    """
+    Convierte una expresión regular simple en un NFA.
+    Devuelve un objeto NFA con:
+      - start: estado inicial
+      - end: estado final marcado con is_final=True
+    """
+    def build_nfa(c: str) -> NFA:
+        # Creamos dos estados: s1 (no final) y s2 (final)
+        s1 = State(is_final=False)
         s2 = State(is_final=True)
+        # Saltos: transición con símbolo c de s1 a s2
         s1.add_transition(c, s2)
         return NFA(s1, s2)
 
-    def concat(nfa1, nfa2):
+    def concat(nfa1: NFA, nfa2: NFA) -> NFA:
+        # Marcamos que el estado intermedio deja de ser final
         nfa1.end.is_final = False
+        # Añadimos un salto epsilon del antiguo end de nfa1 al start de nfa2
         nfa1.end.add_epsilon(nfa2.start)
+        # Nuevo NFA: start de nfa1, end de nfa2
         return NFA(nfa1.start, nfa2.end)
 
-    def alternate(nfa1, nfa2):
-        start = State()
+    # --- Alternativa (|): crea un nuevo start y end, con saltos epsilon a cada rama ---
+    def alternate(nfa1: NFA, nfa2: NFA) -> NFA:
+        start = State(is_final=False)
         end = State(is_final=True)
+        # Saltos epsilon desde nuevo start a cada sub-NFA
         start.add_epsilon(nfa1.start)
         start.add_epsilon(nfa2.start)
+        # Desmarcamos estados finales intermedios
         nfa1.end.is_final = False
         nfa2.end.is_final = False
+        # Saltos epsilon desde cada end antiguo al nuevo end
         nfa1.end.add_epsilon(end)
         nfa2.end.add_epsilon(end)
         return NFA(start, end)
 
-    def kleene(nfa):
-        start = State()
+    # --- Cierre de Kleene (*): bucle y aceptación vacía ---
+    def kleene(nfa: NFA) -> NFA:
+        start = State(is_final=False)
         end = State(is_final=True)
+        # Saltos epsilon para permitir cero o más repeticiones
         start.add_epsilon(nfa.start)
         start.add_epsilon(end)
         nfa.end.is_final = False
         nfa.end.add_epsilon(nfa.start)
         nfa.end.add_epsilon(end)
         return NFA(start, end)
+    
 
-    def parse(regex):
-        output = []
-        ops = []
+    # --- Parser (Shunting-yard) adaptado para regex ---
+    def parse(regex: str) -> NFA:
+        output: list[NFA] = []
+        ops: list[str] = []
+        # Precedencia de operadores
+        prec = {'*': 3, '.': 2, '|': 1}
 
-        def apply_operator():
+        def apply_op():
             op = ops.pop()
-            if op == ".":
+            if op == '.':
+                # Concatenación
                 b = output.pop()
                 a = output.pop()
                 output.append(concat(a, b))
-            elif op == "|":
+            elif op == '|':
+                # Alternativa
                 b = output.pop()
                 a = output.pop()
                 output.append(alternate(a, b))
-            elif op == "*":
+            elif op == '*':
+                # Cierre de Kleene
                 a = output.pop()
                 output.append(kleene(a))
 
-        precedence = {"*": 3, ".": 2, "|": 1}
         i = 0
         while i < len(regex):
             c = regex[i]
             if c.isalnum():
+                # Literal: construye mini-NFA y lo apila
                 output.append(build_nfa(c))
-                if i+1 < len(regex) and (regex[i+1].isalnum() or regex[i+1] == "("):
-                    ops.append(".")
-            elif c == "(":
+                # Si sigue literal o '(', implicamos concatenación
+                if i+1 < len(regex) and (regex[i+1].isalnum() or regex[i+1] == '('):
+                    ops.append('.')
+            elif c == '(':
                 ops.append(c)
-            elif c == ")":
-                while ops[-1] != "(":
-                    apply_operator()
-                ops.pop()
-            elif c in "*|":
-                while ops and ops[-1] != "(" and precedence[ops[-1]] >= precedence[c]:
-                    apply_operator()
+            elif c == ')':
+                while ops and ops[-1] != '(': apply_op()
+                ops.pop()  # quitamos '('
+            elif c in ('*', '|'):
+                # Aplicamos ops de mayor o igual precedencia
+                while ops and ops[-1] != '(' and prec[ops[-1]] >= prec[c]:
+                    apply_op()
                 ops.append(c)
             i += 1
-        while ops:
-            apply_operator()
+        # Aplicamos operadores restantes
+        while ops: apply_op()
         return output[-1]
-
+    
     return parse(pattern)
 
-def epsilon_closure(states):
-    stack = list(states)
+# --- Funciones de simulación y trazas ---
+def epsilon_closure(states: list[State]) -> set[State]:
+    stack = states.copy()
     closure = set(states)
     while stack:
-        state = stack.pop()
-        for next_state in state.epsilon:
-            if next_state not in closure:
-                closure.add(next_state)
-                stack.append(next_state)
+        st = stack.pop()
+        for nxt in st.epsilon:
+            if nxt not in closure:
+                closure.add(nxt)
+                stack.append(nxt)
     return closure
 
-def move(states, symbol):
+def move(states: set[State], symbol: str) -> set[State]:
     result = set()
-    for state in states:
-        if symbol in state.transitions:
-            for target in state.transitions[symbol]:
-                result.add(target)
+    for st in states:
+        # Saltos etiquetados con symbol
+        for tgt in st.transitions.get(symbol, []):
+            result.add(tgt)
     return result
 
 def simulate_nfa(nfa, s):
